@@ -1,0 +1,109 @@
+name: Sync folders with ES-DE
+
+# ES-DE adds a system a few times a year, and this repo had no way to notice. It runs
+# weekly, and on demand when you want to check without waiting.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read ES-DE's system list
+        run: |
+          curl -sSfL \
+            "https://gitlab.com/es-de/emulationstation-de/-/raw/master/resources/systems/android/es_systems.xml" \
+            -o es_systems.xml
+          # <name> appears once per system. Names never contain spaces, which is what
+          # separates them from the other <name> tags in the file.
+          grep -oP '(?<=<name>)[^<]+(?=</name>)' es_systems.xml \
+            | grep -v ' ' | sort -u > fetched.txt
+          echo "ES-DE systems: $(wc -l < fetched.txt)"
+          # A truncated download would otherwise wipe the folder list and publish it.
+          if [ "$(wc -l < fetched.txt)" -lt 50 ]; then
+            echo "Too few systems, refusing to continue" >&2
+            exit 1
+          fi
+
+      - name: Build the folder list
+        run: |
+          # BIOS is not an ES-DE system. It is this repo's own addition, because it is
+          # where every emulator and guide expects firmware to go.
+          { echo BIOS; cat fetched.txt; } | sort -u > systems.txt
+          echo "Total folders: $(wc -l < systems.txt)"
+
+      - name: Stop if nothing changed
+        id: diff
+        run: |
+          if [ -f folders.txt ] && diff -q folders.txt systems.txt > /dev/null; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already in sync."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            if [ -f folders.txt ]; then
+              echo "### Added" >> "$GITHUB_STEP_SUMMARY"
+              comm -13 folders.txt systems.txt >> "$GITHUB_STEP_SUMMARY" || true
+              echo "### Removed" >> "$GITHUB_STEP_SUMMARY"
+              comm -23 folders.txt systems.txt >> "$GITHUB_STEP_SUMMARY" || true
+            fi
+          fi
+
+      - name: Build ROMs.zip
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          rm -rf build ROMs.zip
+          mkdir -p build/ROMs
+          while read -r folder; do
+            mkdir -p "build/ROMs/$folder"
+          done < systems.txt
+          # Both files this pack has always shipped. .nomedia is the one that matters:
+          # without it Android indexes an entire ROM library into the gallery and music
+          # apps. systems.txt says what the pack contains and when it was built.
+          touch build/ROMs/.nomedia
+          cp systems.txt build/ROMs/systems.txt
+          # zip stores empty directories as their own entries, so the folders survive
+          # with nothing in them, which is the whole point of the pack.
+          (cd build && zip -qr ../ROMs.zip ROMs)
+          echo "Entries: $(unzip -l ROMs.zip | tail -1)"
+
+      # GitHub switches off scheduled workflows in a repository that has seen no
+      # activity for sixty days. This one only commits when ES-DE changes something,
+      # which it might not for a quarter, so without this the sync would quietly stop
+      # and nothing would say so. A dated line once a week is the cost of it staying on.
+      - name: Keep the schedule alive
+        if: steps.diff.outputs.changed != 'true' && github.event_name == 'schedule'
+        run: |
+          date -u +"Last checked against ES-DE: %Y-%m-%d %H:%M UTC" > .github/last-checked
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-checked
+          git commit -m "Checked against ES-DE, no change"
+          git push
+
+      - name: Commit the list
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cp systems.txt folders.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add folders.txt
+          git commit -m "Sync folder list with ES-DE ($(wc -l < folders.txt) folders)"
+          git push
+
+      - name: Publish a release
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(date +%m%d%Y)"
+          gh release create "$TAG" ROMs.zip \
+            --title "$TAG UPDATE" \
+            --notes "Synced with ES-DE. $(wc -l < systems.txt) folders, including BIOS." \
+            || gh release upload "$TAG" ROMs.zip --clobber
