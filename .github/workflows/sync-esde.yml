@@ -62,14 +62,16 @@ jobs:
           mkdir -p build/ROMs
           while read -r folder; do
             mkdir -p "build/ROMs/$folder"
-            # Git and most zip tools drop empty directories, and a folder pack of
-            # nothing is the one thing this must not ship.
-            cat > "build/ROMs/$folder/.keep" <<EOF
-          Put your $folder games in this folder.
-          EOF
           done < systems.txt
+          # Both files this pack has always shipped. .nomedia is the one that matters:
+          # without it Android indexes an entire ROM library into the gallery and music
+          # apps. systems.txt says what the pack contains and when it was built.
+          touch build/ROMs/.nomedia
+          cp systems.txt build/ROMs/systems.txt
+          # zip stores empty directories as their own entries, so the folders survive
+          # with nothing in them, which is the whole point of the pack.
           (cd build && zip -qr ../ROMs.zip ROMs)
-          unzip -l ROMs.zip | tail -1
+          echo "Entries: $(unzip -l ROMs.zip | tail -1)"
 
       - name: Commit the list
         if: steps.diff.outputs.changed == 'true'
