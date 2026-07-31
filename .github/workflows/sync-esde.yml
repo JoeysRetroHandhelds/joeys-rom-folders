@@ -73,6 +73,20 @@ jobs:
           (cd build && zip -qr ../ROMs.zip ROMs)
           echo "Entries: $(unzip -l ROMs.zip | tail -1)"
 
+      # GitHub switches off scheduled workflows in a repository that has seen no
+      # activity for sixty days. This one only commits when ES-DE changes something,
+      # which it might not for a quarter, so without this the sync would quietly stop
+      # and nothing would say so. A dated line once a week is the cost of it staying on.
+      - name: Keep the schedule alive
+        if: steps.diff.outputs.changed != 'true' && github.event_name == 'schedule'
+        run: |
+          date -u +"Last checked against ES-DE: %Y-%m-%d %H:%M UTC" > .github/last-checked
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-checked
+          git commit -m "Checked against ES-DE, no change"
+          git push
+
       - name: Commit the list
         if: steps.diff.outputs.changed == 'true'
         run: |
