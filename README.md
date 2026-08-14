@@ -1,4 +1,4 @@
-# joeys-rom-folders
+# joeys-es-de-folders
 
 [![Join our Discord](https://img.shields.io/badge/Discord-Join%20our%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://joeysrh.link/discord)
 
